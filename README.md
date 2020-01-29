@@ -1,6 +1,6 @@
 # PyStreams
 
-Foobar is a Python library for dealing with word pluralization.
+PyStreams is a Python library for dealing with parallelising pipelines of tasks.
 
 ## Usage
 
