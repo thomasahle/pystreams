@@ -22,11 +22,17 @@ def test():
     print(Stream(range(N)).map(lambda x: x <= N).all())
     time.sleep(.1)
 
+    # Count distinct words
     print(Stream(["hej hej med dig", "hvad med dig?"])
           .flatmap(lambda sentence: sentence.split())
           .chunk_by_key(lambda x: hash(x) % 10)
           .reduce_once(lambda chunk: len(set(chunk)))
           .sum())
+
+    # Count characters in a file
+    print(Stream(open('words'))
+          .flatmap(tuple)
+          .count())
 
 
 def benchmark():
