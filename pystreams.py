@@ -191,7 +191,6 @@ class Stream:
             queue.join_thread()
 
         logging.debug('stream closed')
-        # gc.collect()
 
     def _run(self):
         self._start()
@@ -216,9 +215,9 @@ class Stream:
 
     def collect(self, from_chunk, from_objects, finisher):
         # Should really repeat `from_objects` till number of chunks is small enough
-        return finisher(iter(
-            self.reduce_once(from_chunk)
-                        .reduce_once(from_objects)))
+        return finisher(iter(self
+            .reduce_once(from_chunk)
+            .reduce_once(from_objects)))
 
     def chunk_by_key(self, key_function):
         def inner(chunk):
@@ -254,9 +253,10 @@ class Stream:
     def distinct(self, chunks=None):
         if chunks is None:
             chunks = SHUFFLE_CHUNKS
-        return self.chunk_by_key(lambda x: hash(x) % chunks) \
-            .reduce_once(lambda chunk: len(set(chunk))) \
-            .sum()
+        return (self
+            .chunk_by_key(lambda x: hash(x) % chunks)
+            .reduce_once(lambda chunk: len(set(chunk)))
+            .sum())
 
     def flatmap(self, f):
         def inner(chunk):
@@ -314,7 +314,6 @@ class Stream:
                 chunk = q.get()
                 if chunk is End:
                     break
-                #print(chunk, chunk is End, chunk == End)
                 yield from chunk
         return iter(iterable())
 

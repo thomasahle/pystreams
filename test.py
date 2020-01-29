@@ -37,14 +37,14 @@ def benchmark():
     N = 10**3
 
     t = time.time()
-    print(Stream(range(N))
+    print(Stream(range(2, N))
           .flatmap(range)
           .filter(isprime)
           .sum())
     print('sum', time.time() - t)
 
     t = time.time()
-    print(Stream(range(N))
+    print(Stream(range(2, N))
           .flatmap(lambda x: range(x))
           .filter(isprime)
           .reduce((lambda x, y: x + y), 0))
