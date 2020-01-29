@@ -49,14 +49,14 @@ This is done efficiently by buffering and keeping data in chunks, similar to Spa
 454396537
 ```
 
-Takes 11.33 seconds on an Intel Core i7 4, while the following sequential python code
+Takes **11.33** seconds on an Intel Core i7 4, while the following sequential python code
 
 ```python
 >>> print(sum(x for x in range(N) if isprime(x)))
 454396537
 ```
 
-takes nearly 4 times longer at 43.40s.
+takes nearly 4 times longer at **43.40s**.
 
 ## Why another Python Streams clone? 
 
