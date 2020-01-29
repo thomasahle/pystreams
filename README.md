@@ -28,10 +28,18 @@ Another classical example is counting the number of unique words in a dataset:
 6
 ```
 
+Streams also easily works on files, even when the files themselves are too big to fit into memory:
+```python
+>>> print(Stream(open('words'))
+...       .flatmap(tuple)
+...       .count())
+2493109
+```
+
 ## Performance
 
 PyStreams work in parallel over your CPUs.
-This is done efficiently by keeping data in chunks, similar to Spark's RDDs.
+This is done efficiently by buffering and keeping data in chunks, similar to Spark's RDDs.
 
 ```python
 >>> from pystreams import Stream
@@ -41,7 +49,7 @@ This is done efficiently by keeping data in chunks, similar to Spark's RDDs.
 454396537
 ```
 
-Takes 11.33 seconds on an Intel Core i7 4, while the following sequentiall python code
+Takes 11.33 seconds on an Intel Core i7 4, while the following sequential python code
 
 ```python
 >>> print(sum(x for x in range(N) if isprime(x)))
@@ -54,7 +62,7 @@ takes nearly 4 times longer at 43.40s.
 
 There are a number of Streams clones on github:
  [streams](https://github.com/9seconds/streams), [python-stream](https://github.com/fm100/python-stream), [streampy](https://github.com/tolsac/streampy), [Streams](https://github.com/ashbob999/Streams), [python-streams](https://github.com/GideonBuckwalter/python-streams), [python-streaming](https://github.com/dalonsog/python-streaming) and [pyStream](https://github.com/PiotrOpielski/pyStream).
-Unfortunately neither of them has great parallism support, and most don't support methods such as `flatmap` and `chunk_by_key` as used in the examples above.
+Unfortunately, neither of them has great parallelism support, and most don't support methods such as `flatmap` and `chunk_by_key` as used in the examples above.
 That said, this library still has a long way to go to match Java Streams and Spark's RDD feature by feature.
 For example, it is not possible to run workers on a cluster or anything else not supported by Python's `multiprocessing`.
 
@@ -65,3 +73,5 @@ Please make sure to update tests as appropriate.
 
 ## License
 [AGPL3](https://choosealicense.com/licenses/agpl-3.0/)
+
+
