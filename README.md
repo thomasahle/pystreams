@@ -28,7 +28,8 @@ Another classical example is counting the number of unique words in a dataset:
 6
 ```
 
-Streams also easily works on files, even when the files themselves are too big to fit into memory:
+Streams also easily works on files, even when the files themselves are too big to fit into memory.
+The following example counts the number of characters in a file:
 ```python
 >>> print(Stream(open('words'))
 ...       .flatmap(tuple)
