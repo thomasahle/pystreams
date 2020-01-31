@@ -16,6 +16,8 @@ C1
 C2
 ```
 
+Note pystreams support lambdas unlike the map function in `multiprocessinig`.
+
 Another classical example is counting the number of unique words in a dataset:
 
 ```python
