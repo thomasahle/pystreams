@@ -23,10 +23,10 @@ Another classical example is counting the number of unique words in a dataset:
 ```python
 >>> sentences = ["a word is a word", "all words are words"]
 >>> (Stream(sentences)
-...           .flatmap(lambda sentence: sentence.split())
-...           .chunk_by_key(lambda x: hash(x) % 10)
-...           .reduce_once(lambda chunk: len(set(chunk)))
-...           .sum())
+...           .flatmap(lambda sentence: sentence.split())   # Stream of ["a", "word", ...]
+...           .chunk_by_key(lambda x: x)                    # Send similar words to same processses 
+...           .reduce_once(lambda chunk: len(set(chunk)))   # Calculate distinct words on each process
+...           .sum())                                       # Sum to get final result
 6
 ```
 
