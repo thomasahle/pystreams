@@ -47,15 +47,16 @@ This is done efficiently by buffering and keeping data in chunks, similar to Spa
 ```python
 >>> from pystreams import Stream
 >>> isprime = lambda n: not any(n % p == 0 for p in range(2, n))
+>>> N = 10**5
 >>>
->>> Stream(range(2, 10**5)).filter(isprime).sum()
+>>> Stream(range(2, N)).filter(isprime).sum()
 454396537
 ```
 
 Takes **11.33** seconds on an Intel Core i7 4, while the following sequential python code
 
 ```python
->>> print(sum(x for x in range(N) if isprime(x)))
+>>> print(sum(x for x in range(2, N) if isprime(x)))
 454396537
 ```
 
