@@ -1,132 +1,113 @@
+import time
 import random
-import select
 import functools
 import itertools
 import logging
 import threading
-from queue import Empty
+from queue import Empty, Full
 from collections import defaultdict
 import multiprocessing as mp
 
-# logging.basicConfig(level=logging.DEBUG)
+from worker import Worker, End, EmptyBuffers, NoKey
+from util import *
 
-FEED_MAX_SIZE = 100  # Maximum number of chunks in feeding queue
-CHUNK_SIZE = 10000  # Chunk size when rechunking flatmap
-SHUFFLE_CHUNKS = 1000  # Chunk size when rechunking flatmap
+mp.set_start_method('fork')
+import resource
+print("getrlimit before:", resource.getrlimit(resource.RLIMIT_NOFILE))
+resource.setrlimit(resource.RLIMIT_NOFILE, (2**12, 2**62))
 
-# Using objcets doesn't work, since they are made diffent between processes,
-# but classes provide nice sentinels.
-
-# Signal workers to empty buffers
-
-
-class EmptyBuffers:
-    pass
-
-# Signal workers to shut down
+#logger = mp.log_to_stderr()
+#logger.setLevel(logging.INFO)
+#logger.setLevel(mp.SUBDEBUG)
 
 
-class End:
-    pass
+class SequentialStream:
+    def __init__(self, data=None):
+        self.data = data
 
-# Signal workers to shut down
+    def filter(self, f):
+        self.data = filter(f, self.data)
+        return self
 
+    def map(self, f):
+        self.data = map(f, self.data)
+        return self
 
-class NoKey:
-    pass
+    def flatmap(self, f, lazy=True):
+        if lazy:
+            self.data = itertools.chain(map(f, self.data))
+        else:
+            self.data = sum(map(f, self.data), [])
+        return self
 
+    def sum(self):
+        return sum(self.data)
 
-def slice(it, chunksize=1):
-    # More efficient slicing for lists and ranges
-    if hasattr(it, '__getitem__') and hasattr(it, '__len__'):
-        n = len(it)
-        for i in range(0, n, chunksize):
-            yield it[i: i + chunksize]
-    else:
-        it = iter(it)
-        while True:
-            xs = tuple(itertools.islice(it, chunksize))
-            if not xs:
-                return
-            yield xs
+    def count(self):
+        return len(list(self.data))
 
+    def foreach(self, f):
+        for x in self.data:
+            f(x)
 
-def worker(name, feed_queue, work_queue, signals, layers):
-    ending = False
-    buffer = defaultdict(list)
+    def __iter__(self):
+        return iter(self.data)
 
-    def empty_buffers():
-        if buffer:
-            logging.debug(f'worker {name} emptying buffer {buffer}')
-            for (level, key), chunk in buffer.items():
-                if chunk:
-                    work_queue.put((level, chunk))
-            buffer.clear()
+# The advantage of EagerStream is probably in how well it pickles
+class EagerStream:
+    def __init__(self, data=None):
+        self.data = data
 
-    qs = {feed_queue._reader: feed_queue,
-          work_queue._reader: work_queue,
-          signals._reader: signals}
-    while True:
-        # Check if a value is immediately availabe
-        (socks, [], []) = select.select(qs.keys(), [], [], 0)
-        # Otherwise empty the buffers so we don't deadlock
-        if not socks:
-            empty_buffers()
+    def filter(self, f):
+        self.data = list(filter(f, self.data))
+        return self
 
-        # Pick item from one of the queues
-        while True:
-            # We might or might not already have a socket from the previous check
-            if not socks:
-                (socks, [], []) = select.select(qs.keys(), [], [])
-            q = qs[socks[0]]
-            try:
-                task = q.get(timeout=0.001)
-            except Empty:
-                logging.debug(f'Worker {name} saw value, but it was stolen.')
-                del socks[:]  # kill socks, since otherwise we don't call select next time
-                continue
-            break
+    def map(self, f):
+        self.data = list(map(f, self.data))
+        return self
 
-        logging.debug(f'worker {name} got {task}')
+    def flatmap(self, f):
+        self.data = sum(map(list, map(f, self.data)), [])
+        return self
 
-        if task is EmptyBuffers:
-            assert not ending
-            empty_buffers()
-            ending = True
-            q.task_done()
-            continue
+    def sum(self):
+        return sum(self.data)
 
-        if task is End:
-            logging.debug(f'worker {name} exiting')
-            if buffer:
-                # We still need a way to clear things after End
-                logging.error(f'worker {name} is exiting with non-empty buffer {buffer}')
-            break
+    def count(self):
+        return len(list(self.data))
 
-        level, chunk = task
-        # Include buffered elements if we have any
-        if buffer[level, NoKey]:
-            chunk = list(chunk) + buffer[level, NoKey]
-            del buffer[level, NoKey]
-        try:
-            if level >= len(layers):
-                debug.error(f'Got level {level}, but only has layers {layers}')
-            func = layers[level]
-            for key, chunk_out in func(chunk):
-                buf = buffer[level + 1, key]
-                buf.extend(chunk_out)
-                while len(buf) >= CHUNK_SIZE:
-                    work_queue.put((level + 1, buf[-CHUNK_SIZE:]))
-                    del buf[-CHUNK_SIZE:]
-        except Exception as e:
-            logging.warn(f'{name} got error executing func {func} {e}')
+    def foreach(self, f):
+        for x in self.data:
+            f(x)
 
-        # If we're shutting down, we don't want to end up with a non-empty buffer
-        if ending:
-            empty_buffers()
+    def __iter__(self):
+        return iter(self.data)
 
-        q.task_done()
+class FunctionalStream:
+    def __init__(self, data=None):
+        self.data = data
 
+    def filter(self, f):
+        return FunctionalStream(filter(f, self.data))
+
+    def map(self, f):
+        return FunctionalStream(map(f, self.data))
+
+    def flatmap(self, f):
+        return FunctionalStream(itertools.chain(map(f, self.data)))
+
+    def sum(self):
+        return sum(self.data)
+
+    def count(self):
+        return len(list(self.data))
+
+    def foreach(self, f):
+        for x in self.data:
+            f(x)
+
+    def __iter__(self):
+        return iter(self.data)
 
 class Stream:
     def __init__(self, data=None, n=None):
@@ -135,62 +116,71 @@ class Stream:
         self.n = n
         # We want to limit the memory consumption, but we can only safely do it
         # at the feeding level
+
         self.feed_queue = mp.JoinableQueue(FEED_MAX_SIZE)
+        #self.feed_queue = mp.JoinableQueue()
         self.work_queue = mp.JoinableQueue()
         self.layers = []
         self.pool = []
         self.signal_queues = []
-        self.feed_thread = threading.Thread()
+        self.feed_thread = None
         self.started = False
         if data is not None:
             self._data(data)
+        self.cleanup_thread = None
+
+    def join(self):
+        self.cleanup_thread.join()
 
     def _start(self):
         assert not self.started
         self.started = True
         logging.info(f'Starting {self.n} processes')
+        self.signal_queues = [mp.JoinableQueue() for _ in range(self.n)]
         for i in range(self.n):
-            signals = mp.JoinableQueue()
-            self.signal_queues.append(signals)
-            w = mp.Process(target=worker, args=(
-                i, self.feed_queue, self.work_queue, signals, self.layers))
-            # TODO: By setting daemon = True we prevent tasks from making their
-            # own processes. Is that what we want?
-            #w.daemon = True
+            w = Worker(i, self.feed_queue, self.work_queue, self.signal_queues, self.layers)
             w.start()
             self.pool.append(w)
 
     def _stop(self):
         assert self.started
-        logging.debug('waiting for done feeding')
+        # It's safe to wait for the feeding thread, since the other processes
+        # will make sure to empty its queue so it can finish.
+        logging.info('waiting for done feeding')
         self.feed_thread.join()
 
-        logging.debug('telling workers to empty buffers')
-        for signals in self.signal_queues:
-            signals.put(EmptyBuffers)
-        logging.debug('making sure the message is received')
-        for signals in self.signal_queues:
-            signals.join()
-
-        logging.debug('waiting for queues join')
+        # We wait for the queues to settle before sending EmptyBuffers,
+        # so the buffers have a chance to actually work.
+        logging.info('waiting for feed queue join')
         self.feed_queue.join()
+        logging.info('waiting for worker queue join')
         self.work_queue.join()
 
-        logging.debug('sending End')
+        logging.info('telling workers to empty buffers')
         for signals in self.signal_queues:
-            signals.put(End)
-        logging.debug('waiting for processes')
+            signals.put(EmptyBuffers, timeout=LONG_TIMEOUT)
+        logging.info('making sure the message is received')
+        for signals in self.signal_queues:
+            signals.join()
+        logging.info('waiting for work_queue again')
+        self.work_queue.join()
+
+        logging.info('sending End')
+        for signals in self.signal_queues:
+            signals.put(End, timeout=LONG_TIMEOUT)
+        logging.info('waiting for processes')
         for w in self.pool:
             w.join()
+            w.terminate()
 
-        logging.debug('closing')
+        logging.info('closing')
         for closable in self.signal_queues + self.pool + \
                 [self.feed_queue, self.work_queue]:
             closable.close()
         for queue in self.signal_queues + [self.feed_queue, self.work_queue]:
             queue.join_thread()
 
-        logging.debug('stream closed')
+        logging.info('stream closed')
 
     def _run(self):
         self._start()
@@ -198,13 +188,19 @@ class Stream:
 
     def _data(self, it, chunksize=None):
         if chunksize is None:
-            chunksize = CHUNK_SIZE
-
+            if hasattr(it, '__len__'):
+                chunksize = max(len(it)//self.n, 1)
+            else:
+                chunksize = CHUNK_SIZE
         def inner():
             logging.debug('starting feeding thread')
-            for chunk in slice(it, chunksize):
-                self.feed_queue.put((0, chunk))
-        self.feed_thread._target = inner
+            for i, chunk in enumerate(slice(it, chunksize)):
+                #logging.info(f'feeding chunk {i}')
+                self.feed_queue.put((0, chunk), timeout=LONG_TIMEOUT)
+                #logging.info(f'fed chunk {i}')
+        self.feed_thread = threading.Thread(target=inner)
+        # We make sure all data is feed by calling
+        # self.feed_thread_join() in _stop
         self.feed_thread.start()
         return self
 
@@ -213,11 +209,13 @@ class Stream:
                 lambda lists: sum(lists, []),
                 lambda x: x)
 
-    def collect(self, from_chunk, from_objects, finisher):
+    def collect(self, from_chunk, combine, finisher=None):
         # Should really repeat `from_objects` till number of chunks is small enough
-        return finisher(iter(self
-            .reduce_once(from_chunk)
-            .reduce_once(from_objects)))
+        combine_many = functools.partial(functools.reduce, combine)
+        res = combine_many(self.reduce_once(from_chunk).reduce_once(combine_many))
+        if finisher is not None:
+            return finisher(res)
+        return res
 
     def chunk_by_key(self, key_function):
         def inner(chunk):
@@ -262,7 +260,14 @@ class Stream:
         def inner(chunk):
             for x in chunk:
                 # TODO: What if the result of `f` is very large, or infinite?
+                # In that case it would be nice to use the feeder thread and queue
+                # to slowly ingest the data as space becomes available.
+
                 # TODO: Can we be smarter if f(x) is itself a Stream?
+                # In Java, if f(x) is a stream, it is changed to a sequential stream.
+                # We currently don't have a way to convert however.
+                # Also, the Java streams are lazy, so flatmapping to an infinite
+                # stream works. Currently we can only flatmap to EagerStream.
                 yield (NoKey, tuple(f(x)))
         self.layers.append(inner)
         return self
@@ -286,6 +291,7 @@ class Stream:
         return functools.reduce(f, self, unit)
 
     def foreach(self, f):
+        # Note that foreach calls the functioin from different processes.
         def inner(chunk):
             for x in chunk:
                 f(x)
@@ -295,26 +301,32 @@ class Stream:
 
     def __iter__(self):
         """ Iterable implementation which merges all chunks in the main thread. """
-
         q = mp.Queue()
-
         def inner(chunk):
-            q.put(chunk)
+            q.put(chunk, timeout=LONG_TIMEOUT)
             yield from ()
         self.layers.append(inner)
+
         self._start()
 
         def stop_then_end():
+            # _stop ensures that all the calls to inner() has been made.
             self._stop()
-            q.put(End)
-        threading.Thread(target=stop_then_end).start()
+            q.put(End, timeout=LONG_TIMEOUT)
+            time.sleep(.1) # Python bug https://bugs.python.org/issue35844
+            q.close()
+            q.join_thread()
+        self.cleanup_thread = threading.Thread(target=stop_then_end)
+        #self.cleanup_thread.setDaemon(True)
+        self.cleanup_thread.start()
 
         def iterable():
             while True:
-                chunk = q.get()
+                chunk = q.get(timeout=LONG_TIMEOUT)
                 if chunk is End:
                     break
                 yield from chunk
+
         return iter(iterable())
 
     def any(self):
@@ -322,17 +334,26 @@ class Stream:
 
         def inner(chunk):
             if any(chunk):
-                q.put(True)
+                q.put_nowait(True)
             yield from ()
         self.layers.append(inner)
         self._start()
 
         def stop_then_end():
             self._stop()  # Wait for everything to settle down
-            q.put(False)  # Didn't find anything
-        threading.Thread(target=stop_then_end).start()
+            try:
+                q.put_nowait(False)  # Didn't find anything
+            except AssertionError as e:
+                assert q._closed
+        self.cleanup_thread = threading.Thread(target=stop_then_end)
+        #self.cleanup_thread.setDaemon(True)
+        self.cleanup_thread.start()
 
-        res = q.get()
+        res = q.get(timeout=LONG_TIMEOUT)
+        # Cleanup
+        q.close()
+        q.join_thread()
+        # Hopefully the thread will kill itself.
 
         # Try to help workers finish faster
         # for w in self.pool:
