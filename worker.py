@@ -10,15 +10,22 @@ from util import CHUNK_SIZE, LONG_TIMEOUT
 # Using objcets doesn't work, since they are made diffent between processes,
 # but classes provide nice sentinels.
 class EmptyBuffers:
-# Signal workers to empty buffers
+    # Signal workers to empty buffers
     pass
 
+
 class End:
-# Signal workers to shut down
+    # Signal workers to shut down
     pass
+
 
 class NoKey:
     pass
+
+
+class DummyQueue:
+    def task_done(self): pass
+
 
 def multi_get(qs, t1, t2=0, repeat=True):
     """ Get from multiple mp.Queues. """
@@ -35,11 +42,11 @@ def multi_get(qs, t1, t2=0, repeat=True):
         if not repeat:
             break
 
+
 class Worker(mp.Process):
-    def __init__(self, name, feed_queue, work_queue, queues, layers):
+    def __init__(self, name, work_queue, queues, layers):
         super(Worker, self).__init__()
         self.name = f'worker {name}'
-        self.feed_queue = feed_queue
         self.work_queue = work_queue
         self.my_queue = queues[name]
         self.queues = queues
@@ -49,6 +56,7 @@ class Worker(mp.Process):
         self.buffer = defaultdict(list)
         self.task_buffer = []
         self.overflow = 0
+        self.use_overflow = False
 
         # TODO: By setting daemon = True we prevent tasks from making their
         # own processes. Is that what we want?
@@ -56,29 +64,33 @@ class Worker(mp.Process):
 
     def send(self, key, level, chunk):
         if key is not NoKey:
-            self.queues[hash(key)%len(self.queues)].put((level, chunk), timeout=LONG_TIMEOUT)
+            self.queues[hash(key) % len(self.queues)].put(
+                (level, chunk), timeout=LONG_TIMEOUT)
         else:
+            # Isn't it nicer to just put the task in our own queue if we can't put it?
+            task = (level, chunk)
             try:
-                self.work_queue.put_nowait((level, chunk))
+                self.work_queue.put_nowait(task)
             except Full:
+                # Set queue as None, since this was never in a queue and so
+                # queue.task_done() should never be called.
+                self.task_buffer.append((DummyQueue(), task))
                 # Register the queue fullness to increase chunksizes
-                self.overflow = min(self.overflow+1, 5)
-                #logging.debug(f'Overflow level in {self.name} increased to {self.overflow}')
-                # Pull out as many tasks as possible into local memory
-                while True:
-                    try:
-                        task = self.work_queue.get_nowait()
-                        self.task_buffer.append((self.work_queue, task))
-                    except Empty:
-                        break
-                # Then put again, this time waiting longer
-                self.work_queue.put((level, chunk), timeout=LONG_TIMEOUT)
+                if self.use_overflow:
+                    self.overflow = min(self.overflow + 1, 5)
+                    logging.debug(
+                        f'Overflow level in {self.name} increased to {self.overflow}')
 
     def get_task(self):
+        # It's important that we always take from the task buffer before the queues.
+        # This is because the controller doesn't know about these tasks and can't
+        # synchronize with work_queue.join(). All it has is worker.join(), which wouldn't
+        # work if the worker picks up an End from it's signal queue before the
+        # tasks are done.
         if self.task_buffer:
             return self.task_buffer.pop()
 
-        prioritized = (self.my_queue, self.work_queue, self.feed_queue)
+        prioritized = (self.my_queue, self.work_queue)
         q_task = multi_get(prioritized, t1=0, repeat=False)
         if q_task is not None:
             return q_task
@@ -86,8 +98,10 @@ class Worker(mp.Process):
             # Otherwise empty the buffers so we don't deadlock
             self.empty_buffers()
             # Register the queue emptyness to decrease chunksizes
-            self.overflow = max(self.overflow-1, -5)
-            #logging.debug(f'Overflow level in {self.name} decreased to {self.overflow}')
+            if self.use_overflow:
+                self.overflow = max(self.overflow - 1, -5)
+                logging.debug(
+                    f'Overflow level in {self.name} decreased to {self.overflow}')
 
         return multi_get(prioritized, t1=LONG_TIMEOUT, t2=0.001)
 
@@ -115,8 +129,10 @@ class Worker(mp.Process):
                 continue
 
             if task is End:
-                logging.debug(f'{self.name} exiting')
-                assert not (self.buffer and any(self.buffer.values()))
+                logging.info(f'{self.name} exiting')
+                if self.buffer and any(self.buffer.values()) or self.task_buffer:
+                    # This may not be an error if we are cancelling or such.
+                    logging.warn(f'{self.name} has non-empty buffer or task_buffer')
                 q.task_done()
                 return
 
@@ -130,19 +146,22 @@ class Worker(mp.Process):
             try:
                 for key, chunk_out in func(chunk):
                     buf = self.buffer[level + 1, key]
+                    # TODO: The `chunk_out` might be an iterator (even infinite)
+                    # in that case we shouldn't consume everything immdiately, but
+                    # start sending to other workers that may process the stuff.
                     buf.extend(chunk_out)
                     # If queues are full, use larger chunks and vice versa.
                     chunksize = max(1, int(CHUNK_SIZE * 2**(self.overflow)))
                     while len(buf) >= chunksize:
-                        self.send(key, level+1, buf[-chunksize:])
+                        self.send(key, level + 1, buf[-chunksize:])
                         del buf[-chunksize:]
             except Exception as e:
-                logging.warn(f'{self.name} got error executing func {func} {e}')
+                logging.warn(
+                    f'{self.name} got error executing func {func} {e}',
+                    exc_info=True)
 
             # If we're shutting down, we don't want to end up with a non-empty buffer
             if self.ending:
                 self.empty_buffers()
 
             q.task_done()
-
-

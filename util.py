@@ -1,11 +1,11 @@
 import itertools
 
-FEED_MAX_SIZE = 100  # Maximum number of chunks in feeding queue
-#CHUNK_SIZE = 10000  # Chunk size when rechunking flatmap
-CHUNK_SIZE = 10  # Chunk size when rechunking flatmap
+# CHUNK_SIZE = 10000  # Chunk size when rechunking flatmap
+CHUNK_SIZE = 1000  # Chunk size when rechunking flatmap
 SHUFFLE_CHUNKS = 1000  # Chunk size when rechunking flatmap
 
-LONG_TIMEOUT = 100
+LONG_TIMEOUT = 300
+
 
 def slice(it, chunksize=1):
     # More efficient slicing for lists and ranges
